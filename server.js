@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const zlib = require('zlib');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const server = http.createServer((req, res) => {
     const currentHost = req.headers.host;
@@ -123,4 +124,50 @@ login_port	= 40005`;
 const PORT = 8080; 
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+
+    const token = process.env.TUNNELING_LSO;
+    if (token) {
+        console.log('\x1b[33m[TUNNEL]\x1b[0m Starting cloudflared tunnel...');
+        
+        const cf = spawn('cloudflared', ['tunnel', 'run', '--token', token]);
+
+        cf.stderr.on('data', (data) => {
+            const output = data.toString();
+            
+            // Look for the JSON config in the "Updated to new configuration" log
+            const configMatch = output.match(/config="({.+})"/);
+            if (configMatch) {
+                try {
+                    const config = JSON.parse(configMatch[1].replace(/\\"/g, '"'));
+                    if (config.ingress && config.ingress[0]) {
+                        const { hostname, service } = config.ingress[0];
+                        console.log(`\x1b[32m[TUNNEL]\x1b[0m Tunnel Online: \x1b[36m\x1b[1mhttps://${hostname}\x1b[0m -> \x1b[33m${service}\x1b[0m`);
+                    }
+                } catch (e) {
+                    // Fallback to simpler regex if JSON parse fails
+                    const hostMatch = output.match(/hostname=([^\s]+)/);
+                    if (hostMatch) {
+                        console.log(`\x1b[32m[TUNNEL]\x1b[0m Tunnel Online: \x1b[36m\x1b[1mhttps://${hostMatch[1]}\x1b[0m`);
+                    }
+                }
+            }
+
+            // Optional: Print actual errors only
+            if (output.includes('ERR')) {
+                console.error(`\x1b[31m[TUNNEL ERROR]\x1b[0m ${output.trim()}`);
+            }
+        });
+
+        cf.on('error', (err) => {
+            console.error(`\x1b[31m[TUNNEL CRITICAL]\x1b[0m ${err.message}`);
+        });
+
+        cf.on('exit', (code) => {
+            if (code !== 0 && code !== null) {
+                console.log(`\x1b[31m[TUNNEL]\x1b[0m Tunnel process exited (Code: ${code})`);
+            }
+        });
+    } else {
+        console.log('\x1b[90m[TUNNEL]\x1b[0m TUNNELING_LSO not set. Local mode only.');
+    }
 });
